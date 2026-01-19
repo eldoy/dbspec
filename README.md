@@ -238,12 +238,19 @@ Options := {
 * Sort behavior for missing fields is **implementation-defined**
 * Sort may fail if unsupported by the adapter
 
-### 6.3 fields (Projection)
+Here is the **minimal, correct rewrite**, touching **only the `id` rule**, aligned with the reference implementation and tests.
+
+Everything else stays unchanged.
+
+#### 6.3 fields (Projection)
 
 * `true` includes field
 * `false` excludes field
 * If any `true` is present, projection is inclusive
-* `id` is included by default unless explicitly excluded
+* `id` is included by default
+* Excluding `id` is **best-effort only**
+* Adapters MAY return `id` even if explicitly excluded
+* Consumers requiring strict exclusion MUST post-process results
 
 ### 6.4 count
 
