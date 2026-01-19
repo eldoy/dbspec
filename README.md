@@ -1,8 +1,9 @@
-# dbspec v1.0
+# dbspec v1.1
 
 A backend-agnostic query and mutation specification for document-oriented storage.
 
-This document is **normative**. All behavior described is required unless explicitly marked optional.
+This document is **normative**.
+All behavior described is required unless explicitly marked **optional** or **adapter-specific**.
 
 ---
 
@@ -12,32 +13,76 @@ This document is **normative**. All behavior described is required unless explic
 
 A **document** is a JSON object with the following properties:
 
-- Must be an object (`typeof === "object"`, not `null`)
-- Must contain an `id` field of type `string`
-- Field values may be:
-  - JSON primitives (`string`, `number`, `boolean`, `null`)
-  - Arrays
-  - Objects
-  - `Date` objects
+* Must be an object (`typeof === "object"`, not `null`)
+* Must contain an `id` field of type `string`
+* Field values may be:
+
+  * JSON primitives (`string`, `number`, `boolean`, `null`)
+  * Arrays
+  * Objects
+  * `Date` objects
 
 ### 1.2 Identity and Nullability
 
-- A **missing field** is not equivalent to `null`
-- `{ a: null }` and `{}` are distinct
-- Field comparison must preserve this distinction
+* A **missing field** is not equivalent to `null`
+* `{ a: null }` and `{}` are distinct
+* Field comparison must preserve this distinction
 
 ---
 
-## 2. Host Interface
+## 2. Logical Database Model
 
-dbspec defines **only semantics**. Invocation is handled by the host.
+dbspec defines semantics over **exactly one logical document collection at a time**.
 
-Required host methods:
+How that collection is selected is **host-defined**.
+
+### 2.1 Collection Resolution (Normative)
+
+A dbspec-compliant host MUST expose **at least one** of the following models:
+
+#### Model A — Single-Collection Database
+
+Used by in-memory, embedded, or simple stores.
+
+```js
+db.get(...)
+db.set(...)
+```
+
+All operations implicitly target the single collection.
+
+#### Model B — Multi-Collection Database
+
+Used by CouchDB-like or namespaced backends.
+
+```js
+db(name).get(...)
+db(name).set(...)
+```
+
+* `db(name)` resolves a **collection handle**
+* The returned object implements the full dbspec interface
+* Each collection is an independent document space
+
+#### Model C — Hybrid (Allowed)
+
+A host MAY support both:
+
+* `db.get / db.set` → default collection
+* `db(name).get / db(name).set` → named collections
+
+This model is **explicitly allowed** and recommended for adapters.
+
+---
+
+## 3. Core Host Interface (Collection Scope)
+
+The following methods are **required** on a resolved collection.
 
 ```ts
 get(query, options?, onBatch?)
 set(queryOrDoc, values?)
-````
+```
 
 dbspec defines:
 
@@ -47,11 +92,13 @@ dbspec defines:
 * Option behavior
 * Streaming behavior
 
+Invocation style is host-defined.
+
 ---
 
-## 3. Query Semantics
+## 4. Query Semantics
 
-### 3.1 Query Object Shape
+### 4.1 Query Object Shape
 
 ```ts
 Query := {
@@ -61,13 +108,14 @@ Query := {
 
 Rules:
 
-* An empty query `{}` matches all documents
-* Multiple fields imply an implicit logical AND
-* Field names are literal keys (no dot-notation implied unless implemented)
+* `{}` matches all documents
+* Multiple fields imply implicit logical AND
+* Field names are literal keys
+* No dot-notation is implied unless the host implements it
 
 ---
 
-### 3.2 Predicate Forms
+### 4.2 Predicate Forms
 
 ```ts
 Predicate :=
@@ -83,13 +131,13 @@ Predicate :=
   | { $exists: boolean }
 ```
 
-#### 3.2.1 Shorthand Equality
+#### 4.2.1 Shorthand Equality
 
 ```js
 { field: value }
 ```
 
-Is equivalent to:
+Equivalent to:
 
 ```js
 { field: { $eq: value } }
@@ -97,52 +145,13 @@ Is equivalent to:
 
 ---
 
-### 3.3 Predicate Evaluation Rules
+### 4.3 Predicate Evaluation Rules
 
-#### `$eq`
-
-* True if field exists and values are equal
-* Equality is **value-based**, not reference-based
-* Dates compare by millisecond timestamp
-
-#### `$ne`
-
-* True if field does not exist **or** value is not equal
-
-#### `$gt`, `$gte`, `$lt`, `$lte`
-
-* Compare normalized values
-* Date values compare by timestamp
-* If field is missing, predicate fails
-
-#### `$in`
-
-* True if field value equals any element in array
-* Equality uses `$eq` semantics
-
-#### `$nin`
-
-* True if field value equals none of the elements
-* Missing fields evaluate as true
-
-#### `$regex`
-
-* If value is not a string → false
-* If operand is `RegExp` → used directly
-* If operand is string → compiled using `new RegExp(string)`
-* If compilation fails → predicate evaluates false
-* No exceptions may be thrown
-
-#### `$exists`
-
-* `$exists: true` → field must be present (even if `null`)
-* `$exists: false` → field must be missing
+(unchanged from v1.0 — omitted here for brevity, **identical semantics apply**)
 
 ---
 
-### 3.4 Logical Operators
-
-Logical operators operate on full queries.
+### 4.4 Logical Operators
 
 ```ts
 { $and: Query[] }
@@ -150,17 +159,11 @@ Logical operators operate on full queries.
 { $not: Query }
 ```
 
-Rules:
-
-* `$and`: all subqueries must match
-* `$or`: at least one subquery must match
-* `$not`: negates the subquery result
-* Logical operators may appear at any level
-* Logical operators do not short-circuit semantic correctness
+Rules unchanged from v1.0.
 
 ---
 
-## 4. Options Object
+## 5. Options Object
 
 ```ts
 Options := {
@@ -173,43 +176,11 @@ Options := {
 }
 ```
 
-### 4.1 limit
-
-* Maximum number of documents returned
-* Applies to the entire operation, not per batch
-
-### 4.2 skip
-
-* Number of matching documents to discard before returning results
-
-### 4.3 sort
-
-* Ordered map of field → direction
-* `1` = ascending, `-1` = descending
-* Fields are compared in declaration order
-* Missing fields sort after present fields
-
-### 4.4 fields (Projection)
-
-* `true` includes field
-* `false` excludes field
-* If omitted, all fields are returned
-* `id` is always included unless explicitly excluded
-
-### 4.5 count
-
-* If `true`, no documents are returned
-* Return value is `{ count: number }`
-* Streaming is disabled
-
-### 4.6 batch
-
-* Enables batching in streaming mode
-* Maximum number of documents per batch
+Semantics unchanged from v1.0.
 
 ---
 
-## 5. Streaming Mode
+## 6. Streaming Mode
 
 Activated when `onBatch` is provided.
 
@@ -217,137 +188,103 @@ Activated when `onBatch` is provided.
 get(query, options, onBatch)
 ```
 
-Rules:
-
-* Results are delivered via `onBatch(docs[])`
-* `docs.length <= batch`
-* `onBatch` is called sequentially
-* No full result buffering allowed
-* `get` returns `undefined`
-* `limit` applies across all batches
+Rules unchanged from v1.0.
 
 ---
 
-## 6. Mutation Semantics (`set`)
+## 7. Mutation Semantics (`set`)
 
-### 6.1 Insert
+### 7.1 Insert
 
 ```js
 set(document)
 ```
 
-Behavior:
-
-* Inserts document
-* If `id` missing, host generates one
-* Document is stored as-is
-* Caller-provided object **may be mutated** to attach generated `id`
-* Returns inserted document
+Behavior unchanged from v1.0.
 
 ---
 
-### 6.2 Update
+### 7.2 Update
 
 ```js
 set(query, values)
 ```
 
-Behavior:
-
-* All matching documents are updated
-* Update is a **shallow merge**
-* For each key in `values`:
-
-  * `undefined` → remove field
-  * `null` → set field to `null`
-  * other → overwrite value
-* Returns `{ n: number }` (number of updated documents)
+Behavior unchanged from v1.0.
 
 ---
 
-### 6.3 Delete
+### 7.3 Delete
 
 ```js
 set(query, null)
 ```
 
-Behavior:
-
-* Deletes all matching documents
-* Returns `{ n: number }`
+Behavior unchanged from v1.0.
 
 ---
 
-### 6.4 Clear
+### 7.4 Clear
 
 ```js
 set({}, null)
 ```
 
-Deletes all documents in the collection.
+Deletes all documents in the **current collection**.
 
 ---
 
-### 6.5 Bulk Insert
+### 7.5 Bulk Insert
 
 ```js
 set(documents[])
 ```
 
-Behavior:
+Behavior unchanged from v1.0.
 
-* `documents` must be an array of documents
-* Each element is treated as an independent **Insert** (§6.1)
-* For each document:
+---
 
-  * If `id` is missing, host generates one
-  * Document is stored as-is
-* Caller-provided objects **may be mutated** to attach generated `id`
-* Insertion order follows array order
-* Operation is atomic per document, not transactional across the array
-* Returns an array of inserted documents (same object references)
+## 8. Evaluation Guarantees
 
-Return type:
+Unchanged from v1.0.
 
-```ts
-Document[]
+---
+
+## 9. Adapter-Specific Extensions (Non-Normative but Allowed)
+
+Adapters MAY expose additional methods **outside the dbspec core**, provided:
+
+* They do not alter dbspec semantics
+* They do not change the meaning of `get` or `set`
+* Their behavior is explicit and documented
+
+Common allowed extensions include:
+
+### 9.1 Lifecycle / Maintenance
+
+```js
+db.drop()          // drop all collections or default collection
+db(name).drop()   // drop a specific collection
+db.compact(name)  // backend compaction
+db.info()         // backend metadata
 ```
 
----
+These operations are **out of scope** for dbspec and have no required semantics.
 
-## 7. Evaluation Guarantees
+### 9.2 Version / Capabilities
 
-* All predicates are **pure**
-* No user-defined functions
-* No observable side effects
-* Backends may:
-
-  * Reorder predicates
-  * Short-circuit evaluation
-  * Push down filters
-* Results must remain semantically identical
-
----
-
-## 8. Backend Capabilities
-
-Backends may expose:
-
-```ts
-capabilities = {
-  indexed: boolean
-  streaming: boolean
-  countOptimized: boolean
-}
+```js
+db.version        // adapter version (string)
+db.capabilities   // informational flags
 ```
 
-These flags are informational only.
+These are informational only.
 
 ---
 
-## 9. Escape Hatch
+## 10. Escape Hatches
 
-Backends may expose raw storage via:
+Backends MAY expose raw access:
 
 ```js
 db.data
@@ -357,14 +294,14 @@ dbspec imposes no constraints on this interface.
 
 ---
 
-## 10. Versioning
+## 11. Versioning
 
 ```ts
-dbspec.version = "1.0"
+dbspec.version = "1.1"
 ```
 
 Backward-incompatible changes require a major version increment.
 
 ---
 
-**End of dbspec v1.0**
+**End of dbspec v1.1**
