@@ -241,6 +241,7 @@ Behavior:
 * Inserts document
 * If `id` missing, host generates one
 * Document is stored as-is
+* Caller-provided object **may be mutated** to attach generated `id`
 * Returns inserted document
 
 ---
@@ -287,6 +288,33 @@ Deletes all documents in the collection.
 
 ---
 
+### 6.5 Bulk Insert
+
+```js
+set(documents[])
+```
+
+Behavior:
+
+* `documents` must be an array of documents
+* Each element is treated as an independent **Insert** (§6.1)
+* For each document:
+
+  * If `id` is missing, host generates one
+  * Document is stored as-is
+* Caller-provided objects **may be mutated** to attach generated `id`
+* Insertion order follows array order
+* Operation is atomic per document, not transactional across the array
+* Returns an array of inserted documents (same object references)
+
+Return type:
+
+```ts
+Document[]
+```
+
+---
+
 ## 7. Evaluation Guarantees
 
 * All predicates are **pure**
@@ -313,7 +341,7 @@ capabilities = {
 }
 ```
 
-These flags are informational only and do not affect semantics.
+These flags are informational only.
 
 ---
 
