@@ -1,37 +1,27 @@
-Below is a **clean reset** to **dbspec v1.0**, rewritten to reflect the new philosophy:
-
-* **Single portable query language, as much as possible**
-* **Reference implementation defines semantics**
-* **No over-specification that forces client-side emulation**
-* **Backend-native behavior is allowed where portable**
-* **Escape hatch (`data`) is explicit and intentional**
-* **No mention of CouchDB, Mango, MongoDB, SQLite, or any backend by name**
-
-This is a *grounded*, *executable* spec.
-
----
-
 # dbspec v1.0
 
 A backend-agnostic query and mutation specification for document-oriented storage.
 
 This document is **normative**.
-All behavior described is required unless explicitly marked **implementation-defined** or **optional**.
+All behavior described is required unless explicitly marked **implementation-defined**.
 
 ---
 
 ## 1. Purpose and Scope
 
-dbspec defines a **portable query and mutation interface** for document-oriented databases.
+dbspec defines a **portable, minimal, stable interface** for document databases.
 
-The goal is to provide:
+Goals:
 
-* A single query language usable across adapters
-* Minimal application changes when switching adapters
-* Native execution where possible
-* Explicit escape hatches where portability ends
+* Single query language
+* Stable return shapes
+* No semantic overloading
+* No mode flags
+* No feature creep
+* Adapter-native execution where possible
+* Explicit adapter responsibility where not
 
-dbspec defines **interface and semantics**, not execution strategy.
+dbspec defines **semantics**, not execution strategy.
 
 ---
 
@@ -39,22 +29,24 @@ dbspec defines **interface and semantics**, not execution strategy.
 
 ### 2.1 Document
 
-A **document** is a JSON object with the following properties:
+A **document** is a JSON object:
 
 * Must be an object (`typeof === "object"`, not `null`)
-* Must contain an `id` field of type `string`
+* Must contain an `id: string`
 * Field values may be:
 
-  * JSON primitives (`string`, `number`, `boolean`, `null`)
+  * JSON primitives
   * Arrays
   * Objects
   * `Date` objects
 
+---
+
 ### 2.2 Identity and Nullability
 
-* A **missing field** is not equivalent to `null`
+* Missing field ≠ `null`
 * `{ a: null }` and `{}` are distinct
-* Equality and comparison operators MUST preserve this distinction
+* Equality, comparison, and updates MUST preserve this distinction
 
 ---
 
@@ -62,47 +54,38 @@ A **document** is a JSON object with the following properties:
 
 dbspec operates on **exactly one logical collection at a time**.
 
-How a collection is selected is **host-defined**.
+Collection resolution is **host-defined**.
 
-### 3.1 Collection Resolution
-
-A dbspec-compliant host MUST expose at least one of the following models.
-
-#### Model A — Single Collection
+Supported models:
 
 ```js
+db.all(...)
 db.get(...)
 db.set(...)
 ```
 
-All operations implicitly target the single collection.
-
-#### Model B — Named Collections
+or
 
 ```js
+db(name).all(...)
 db(name).get(...)
 db(name).set(...)
 ```
-
-* `db(name)` returns a collection handle
-* Each collection is an independent document space
-
-#### Model C — Hybrid (Allowed)
-
-Hosts MAY support both models simultaneously.
 
 ---
 
 ## 4. Core Collection Interface
 
-The following methods are **required** on a collection handle:
+The **entire portable surface** consists of four methods:
 
 ```ts
-get(query, options?, onBatch?)
-set(queryOrDoc, values?)
+all(query, options?) -> Document[]
+get(query) -> Document | null
+count(query) -> number
+set(document | document[] | query, values?) -> { n: number }
 ```
 
-These methods define the **entire portable surface area** of dbspec.
+No other core methods exist.
 
 ---
 
@@ -121,7 +104,7 @@ Rules:
 * `{}` matches all documents
 * Multiple fields imply logical AND
 * Field names are literal keys
-* No dot-notation is implied unless the adapter documents support
+* No implicit dot-notation
 
 ---
 
@@ -157,43 +140,31 @@ Equivalent to:
 
 ### 5.3 Predicate Semantics
 
-#### `$eq`
+* `$eq`
+  Field must exist; values compared by identity
+  Dates compare by timestamp
 
-* Matches if field exists and values are equal
-* Dates compare by millisecond timestamp
+* `$ne`
+  Field must exist; value must not equal operand
 
-#### `$ne`
+* `$gt`, `$gte`, `$lt`, `$lte`
+  Field must exist; natural ordering
+  Dates compare by timestamp
 
-* Matches if field exists and value is not equal
+* `$in`
+  Field must exist; matches any element
 
-#### `$gt`, `$gte`, `$lt`, `$lte`
+* `$nin`
+  Field must exist; matches none
+  Missing-field behavior is **implementation-defined**
 
-* Field must exist
-* Values compared by natural ordering
-* Dates compare by timestamp
+* `$regex`
+  Field must be string
+  Invalid patterns never throw; evaluate as non-matching
 
-#### `$in`
-
-* Field must exist
-* Matches if value equals any element
-
-#### `$nin`
-
-* Field must exist
-* Matches if value equals none of the elements
-* Behavior for missing fields is **implementation-defined**
-
-#### `$regex`
-
-* Field must be a string
-* String operand is compiled via `RegExp`
-* Invalid patterns evaluate as non-matching
-* No exceptions may be thrown
-
-#### `$exists`
-
-* `$exists: true` → field must be present
-* `$exists: false` → field must be missing
+* `$exists`
+  `true` → field present
+  `false` → field missing
 
 ---
 
@@ -205,16 +176,12 @@ Equivalent to:
 { $not: Query }
 ```
 
-Rules:
-
-* `$and`: all subqueries must match
-* `$or`: at least one subquery must match
-* `$not`: negates the subquery
-* Logical operators may appear at any level
+* Operators may appear at any level
+* Semantics are strictly logical
 
 ---
 
-## 6. Options Object
+## 6. Options Object (for `all` only)
 
 ```ts
 Options := {
@@ -222,8 +189,6 @@ Options := {
   skip?: number         // default: 0
   sort?: { [field]: 1 | -1 }
   fields?: { [field]: boolean }
-  count?: boolean
-  batch?: number
 }
 ```
 
@@ -232,139 +197,137 @@ Options := {
 * Applied after query evaluation
 * `limit` caps total returned documents
 
+---
+
 ### 6.2 sort
 
-* Field → direction map
-* Sort behavior for missing fields is **implementation-defined**
-* Sort may fail if unsupported by the adapter
+* Field → direction
+* Missing-field behavior is **implementation-defined**
+* Unsupported sorts MAY fail
 
-Here is the **minimal, correct rewrite**, touching **only the `id` rule**, aligned with the reference implementation and tests.
+---
 
-Everything else stays unchanged.
-
-#### 6.3 fields (Projection)
+### 6.3 fields (Projection)
 
 * `true` includes field
 * `false` excludes field
-* If any `true` is present, projection is inclusive
+* Any `true` → inclusive projection
 * `id` is included by default
-* Excluding `id` is **best-effort only**
-* Adapters MAY return `id` even if explicitly excluded
-* Consumers requiring strict exclusion MUST post-process results
-
-### 6.4 count
-
-* If `true`, no documents are returned
-* Return value is `{ count: number }`
-* Streaming is disabled
-
-### 6.5 batch
-
-* Controls delivery size in streaming mode
-* Does not imply execution strategy
+* Excluding `id` is **best-effort**
+* Consumers requiring strict exclusion MUST post-process
 
 ---
 
-## 7. Streaming Mode
+## 7. Read Semantics
 
-Activated when `onBatch` is provided.
+### 7.1 `all(query, options?)`
+
+* Returns zero or more documents
+* Always returns an array
+* Empty result → `[]`
+
+---
+
+### 7.2 `get(query)`
+
+* Returns the **first matching document**
+* Returns `null` if none
+* Never returns an array
+* No options object
+* No flags
+
+---
+
+### 7.3 `count(query)`
+
+* Returns number of matching documents
+* No document materialization required
+* Adapter MAY iterate internally if backend lacks native count
+
+---
+
+## 8. Write Semantics (`set`)
+
+`set` is the **only mutation primitive**.
+
+### 8.1 Forms
 
 ```js
-get(query, options, onBatch)
+set(document)
+set(document[])
+set(query, values)
+set(query, null)
 ```
-
-Rules:
-
-* Results are delivered via `onBatch(docs[])`
-* `docs.length <= batch`
-* Calls are sequential
-* Internal buffering is **allowed**
-* `get` returns `undefined`
-
-Streaming defines **delivery**, not execution.
 
 ---
 
-## 8. Mutation Semantics (`set`)
+### 8.2 General Rules
 
-### 8.1 Insert
+* `set` always **upserts**
+* Shallow merge
+* Returns `{ n }` = number of documents changed
+* Atomicity is **per document**
+
+---
+
+### 8.3 Insert / Upsert
 
 ```js
 set(document)
 ```
 
 * Inserts document
-* If `id` missing, host generates one
-* Object MAY be mutated to attach `id`
-* Returns inserted document
-
----
-
-### 8.2 Bulk Insert
+* If `id` exists → replaces document
+* If `id` missing → host generates one
 
 ```js
-set(documents[])
+set(document[])
 ```
 
-* Each document treated as independent insert
-* Operation is atomic per document
-* Returns inserted documents (same object references)
+* Each document processed independently
+* Per-document atomicity
 
 ---
 
-### 8.3 Update
+### 8.4 Update / Upsert by Query
 
 ```js
 set(query, values)
 ```
 
-* Updates all matching documents
-* Shallow merge
-* `undefined` removes field
-* `null` sets field to `null`
-* Returns `{ n: number }`
+* All matching documents are updated
+* If no documents match:
+
+  * A new document is created
+  * Equality fields from `query` and `values` are merged
+
+#### Field rules
+
+* `undefined` → field is **removed**
+* `null` → field is stored as `null`
 
 ---
 
-### 8.4 Delete
+### 8.5 Delete
 
 ```js
 set(query, null)
 ```
 
 * Deletes all matching documents
-* Returns `{ n: number }`
+* `{}` deletes all documents in the collection
+* Returns `{ n }`
 
 ---
 
-### 8.5 Clear
+## 9. Adapter Responsibilities
 
-```js
-set({}, null)
-```
+Adapters MUST:
 
-Deletes all documents in the current collection.
-
----
-
-## 9. Adapter Extensions (Allowed)
-
-Adapters MAY expose additional APIs outside dbspec, provided:
-
-* Core semantics remain unchanged
-* Extensions are clearly documented
-
-Examples:
-
-```js
-db.drop()
-db(name).drop()
-db.compact(name)
-db.info()
-db.version
-```
-
-These are **out of scope** for dbspec.
+* Preserve all semantic distinctions
+* Use backend-native operations where possible
+* Perform fetch-merge-write where backend lacks partial updates
+* Never expose backend artifacts (`_rev`, internal IDs)
 
 ---
 
