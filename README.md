@@ -1,97 +1,137 @@
-# dbspec v1.0
-
-A backend-agnostic query and mutation specification for document-oriented storage.
-
-This document is **normative**.
-All behavior described is required unless explicitly marked **implementation-defined**.
+## RFC: Database Adapter Interface Specification
 
 ---
 
-## 1. Purpose and Scope
+## 1. Scope
 
-dbspec defines a **portable, minimal, stable interface** for document databases.
-
-Goals:
-
-* Single query language
-* Stable return shapes
-* No semantic overloading
-* No mode flags
-* No feature creep
-* Adapter-native execution where possible
-* Explicit adapter responsibility where not
-
-dbspec defines **semantics**, not execution strategy.
+This RFC defines a minimal, uniform database adapter interface.
+The specification is **definition-only**.
 
 ---
 
-## 2. Data Model
+## 2. Core Concepts
 
 ### 2.1 Document
 
-A **document** is a JSON object:
-
-* Must be an object (`typeof === "object"`, not `null`)
-* Must contain an `id: string`
-* Field values may be:
-
-  * JSON primitives
-  * Arrays
-  * Objects
-  * `Date` objects
+* JavaScript object convertible to JSON
+* `id` is the logical identifier
+* `_id` is used transparently when required by the underlying client
+* `rev` is optional and adapter-defined
+* `null` values are removed before storage
+* Date objects are converted to the underlying client representation
 
 ---
 
-### 2.2 Identity and Nullability
+## 3. Adapter Surface
 
-* Missing field ≠ `null`
-* `{ a: null }` and `{}` are distinct
-* Equality, comparison, and updates MUST preserve this distinction
-
----
-
-## 3. Logical Database Model
-
-dbspec operates on **exactly one logical collection at a time**.
-
-Collection resolution is **host-defined**.
-
-Supported models:
-
-```js
-db.all(...)
-db.get(...)
-db.set(...)
-```
-
-or
-
-```js
-db(name).all(...)
-db(name).get(...)
-db(name).set(...)
-```
-
----
-
-## 4. Core Collection Interface
-
-The **entire portable surface** consists of four methods:
+### 3.1 `insert`
 
 ```ts
-all(query, options?) -> Document[]
-get(query) -> Document | null
-count(query) -> number
-set(document | document[] | query, values?) -> { n: number }
+insert(values: Array<JSONSerializableObject>)
+  -> Array<{ id: ID, rev?: Rev }>
 ```
 
-No other core methods exist.
+* Inserts multiple documents
+* UUID generated if `id` missing
+* Input order preserved
 
 ---
 
-## 5. Query Semantics
+### 3.2 `update`
 
-### 5.1 Query Object Shape
+```ts
+update(query: Query, values: JSONSerializableObject)
+  -> { n: number }
+```
+
+* Updates all matching documents
+* `null` properties removed
+
+---
+
+### 3.3 `remove`
+
+```ts
+remove(query: Query)
+  -> { n: number }
+```
+
+* Removes all matching documents
+
+---
+
+### 3.4 `list`
+
+```ts
+list(query: Query, queryOptions?: QueryOptions)
+  -> Array<Doc>
+```
+
+* Default limit: 100
+
+---
+
+### 3.5 `batch`
+
+```ts
+batch(
+  query: Query,
+  batchOptions: QueryOptions & { size?: number },
+  handler: (docs: Array<Doc>) => void | Promise<void>
+) -> void | Promise<void>
+```
+
+* Default `size`: 1000
+
+---
+
+### 3.6 `set`
+
+```ts
+set(values: JSONSerializableObject)
+  -> Doc
+
+set(query: Query, values: JSONSerializableObject | null)
+  -> Doc | null
+```
+
+* Always returns full document
+* `set(values)` with existing `id` returns existing doc without write
+* `set(query, null)` deletes and returns deleted doc or `null`
+
+---
+
+### 3.7 `get`
+
+```ts
+get(query: Query, queryOptions?: QueryOptions)
+  -> Doc | null
+```
+
+---
+
+### 3.8 `count`
+
+```ts
+count(query: Query, queryOptions?: QueryOptions)
+  -> number
+```
+
+---
+
+### 3.9 `index`
+
+```ts
+index(...args: unknown[]) -> unknown
+```
+
+* Adapter-specific
+
+---
+
+## 4. Query Semantics
+
+### 4.1 Query Shape
 
 ```ts
 Query := {
@@ -99,16 +139,13 @@ Query := {
 }
 ```
 
-Rules:
-
 * `{}` matches all documents
 * Multiple fields imply logical AND
-* Field names are literal keys
 * No implicit dot-notation
 
 ---
 
-### 5.2 Predicate Forms
+### 4.2 Predicate Forms
 
 ```ts
 Predicate :=
@@ -124,67 +161,30 @@ Predicate :=
   | { $exists: boolean }
 ```
 
-#### Shorthand Equality
+Shorthand:
 
 ```js
-{ field: value }
-```
-
-Equivalent to:
-
-```js
-{ field: { $eq: value } }
+{ field: value } === { field: { $eq: value } }
 ```
 
 ---
 
-### 5.3 Predicate Semantics
+### 4.3 Predicate Semantics
 
-* `$eq`
-  Field must exist; values compared by identity
-  Dates compare by timestamp
-
-* `$ne`
-  Field must exist; value must not equal operand
-
-* `$gt`, `$gte`, `$lt`, `$lte`
-  Field must exist; natural ordering
-  Dates compare by timestamp
-
-* `$in`
-  Field must exist; matches any element
-
-* `$nin`
-  Field must exist; matches none
-  Missing-field behavior is **implementation-defined**
-
-* `$regex`
-  Field must be string
-  Invalid patterns never throw; evaluate as non-matching
-
-* `$exists`
-  `true` → field present
-  `false` → field missing
+* `$eq`: field exists; identity comparison; dates by timestamp
+* `$ne`: field exists; not equal
+* `$gt/$gte/$lt/$lte`: natural ordering; dates by timestamp
+* `$in`: matches any element
+* `$nin`: missing-field behavior implementation-defined
+* `$regex`: invalid patterns never throw
+* `$exists`: presence test
 
 ---
 
-### 5.4 Logical Operators
+## 5. Query Options
 
 ```ts
-{ $and: Query[] }
-{ $or: Query[] }
-{ $not: Query }
-```
-
-* Operators may appear at any level
-* Semantics are strictly logical
-
----
-
-## 6. Options Object (for `all` only)
-
-```ts
-Options := {
+QueryOptions := {
   limit?: number        // default: 1000
   skip?: number         // default: 0
   sort?: { [field]: 1 | -1 }
@@ -192,165 +192,24 @@ Options := {
 }
 ```
 
-### 6.1 limit / skip
-
-* Applied after query evaluation
-* `limit` caps total returned documents
+* `id` included by default if available
 
 ---
 
-### 6.2 sort
+## 6. Adapter Extensions
 
-* Field → direction
-* Missing-field behavior is **implementation-defined**
-* Unsupported sorts MAY fail
-
----
-
-### 6.3 fields (Projection)
-
-* `true` includes field
-* `false` excludes field
-* Any `true` → inclusive projection
-* `id` is included by default
-* Excluding `id` is **best-effort**
-* Consumers requiring strict exclusion MUST post-process
+* Adapter-specific functions allowed
+* Underlying client exposed via `adapter.data`
 
 ---
 
-## 7. Read Semantics
+## 7. Non-Goals
 
-### 7.1 `all(query, options?)`
-
-* Returns zero or more documents
-* Always returns an array
-* Empty result → `[]`
-
----
-
-### 7.2 `get(query)`
-
-* Returns the **first matching document**
-* Returns `null` if none
-* Never returns an array
-* No options object
-* No flags
+* Transactions
+* Schemas
+* Concurrency guarantees
+* Storage assumptions
 
 ---
 
-### 7.3 `count(query)`
-
-* Returns number of matching documents
-* No document materialization required
-* Adapter MAY iterate internally if backend lacks native count
-
----
-
-## 8. Write Semantics (`set`)
-
-`set` is the **only mutation primitive**.
-
-### 8.1 Forms
-
-```js
-set(document)
-set(document[])
-set(query, values)
-set(query, null)
-```
-
----
-
-### 8.2 General Rules
-
-* `set` always **upserts**
-* Shallow merge
-* Returns `{ n }` = number of documents changed
-* Atomicity is **per document**
-
----
-
-### 8.3 Insert / Upsert
-
-```js
-set(document)
-```
-
-* Inserts document
-* If `id` exists → replaces document
-* If `id` missing → host generates one
-
-```js
-set(document[])
-```
-
-* Each document processed independently
-* Per-document atomicity
-
----
-
-### 8.4 Update / Upsert by Query
-
-```js
-set(query, values)
-```
-
-* All matching documents are updated
-* If no documents match:
-
-  * A new document is created
-  * Equality fields from `query` and `values` are merged
-
-#### Field rules
-
-* `undefined` → field is **removed**
-* `null` → field is stored as `null`
-
----
-
-### 8.5 Delete
-
-```js
-set(query, null)
-```
-
-* Deletes all matching documents
-* `{}` deletes all documents in the collection
-* Returns `{ n }`
-
----
-
-## 9. Adapter Responsibilities
-
-Adapters MUST:
-
-* Preserve all semantic distinctions
-* Use backend-native operations where possible
-* Perform fetch-merge-write where backend lacks partial updates
-* Never expose backend artifacts (`_rev`, internal IDs)
-
----
-
-## 10. Escape Hatch
-
-Adapters MAY expose backend-native access via:
-
-```js
-db.data
-```
-
-Use of `data` is **explicitly non-portable**.
-
----
-
-## 11. Versioning
-
-```ts
-dbspec.version = "1.0"
-```
-
-Backward-incompatible changes require a major version increment.
-
----
-
-**End of dbspec v1.0**
+**End of RFC**
