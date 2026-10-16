@@ -17,7 +17,9 @@ Language bindings choose their native types, function or method syntax, receiver
 | `get(collection, id, options?)` | Read by ID | Document or `null` |
 | `get(collection, query, options?)` | Read the first match | Document or `null` |
 | `get(collection, selectors, options?)` | Read all matches | List of documents |
-| `get(collection, selector, null)` | Count matches | Number |
+| `get(collection, id, null)` | Check existence by ID | `0` or `1` |
+| `get(collection, query, null)` | Check whether any match exists | `0` or `1` |
+| `get(collection, selectors, null)` | Count all matches | Number |
 | `set(collection, document, options?)` | Upsert and merge | Stored document |
 | `set(collection, documents, options?)` | Upsert and merge many | List of stored documents |
 | `set(collection, id, null, options?)` | Delete by ID | Number deleted |
@@ -105,18 +107,19 @@ These return the oldest and second-oldest matching users, respectively.
 
 ### Count
 
-A literal `null` in the options position requests the number of matching documents:
+A literal `null` in the options position counts matching documents instead of returning them. The selector shape determines the count, mirroring reads: a list counts all matches, while an ID or query checks existence and returns `0` or `1`:
 
 ```js
-get('user', {}, null) // Count all documents
-get('user', { active: true }, null)
-get('user', [{ active: true }], null) // Same count
+get('user', [{}], null) // Count all documents
+get('user', [{ active: true }], null)
 get('user', [{ country: 'NO' }, { country: 'SE' }], null)
-get('user', 'user-id', null) // 0 or 1
 get('user', [], null) // 0
+
+get('user', 'user-id', null) // 0 or 1
+get('user', { active: true }, null) // 1 if any match, else 0
 ```
 
-Non-list selectors are automatically wrapped in a list for counting. A map therefore counts all matches rather than selecting only the first. Each matching document counts once, even if it matches several list entries.
+Each matching document counts once, even if it matches several list entries.
 
 Counting returns a number without returning documents. There are no pagination options in the count form.
 
