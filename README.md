@@ -1,215 +1,250 @@
-## RFC: Database Adapter Interface Specification
+# Database Interface Specification
 
----
+A document database interface with two core verbs: `get` and `set`.
 
-## 1. Scope
+Objects describe one document or query. Arrays describe multiple documents or alternative queries. `null` selects counting in `get` and deletion in `set`. Argument shape and position determine the operation.
 
-This RFC defines a minimal, uniform database adapter interface.
-The specification is **definition-only**.
+This specification defines behavior, not a storage engine or implementation. All calls return promises; examples use `await` to show their resolved values.
 
----
+## Core grammar
 
-## 2. Core Concepts
+| Call | Operation | Result |
+| --- | --- | --- |
+| `get(collection, id, options?)` | Read by ID | Document or `null` |
+| `get(collection, query, options?)` | Read the first match | Document or `null` |
+| `get(collection, selectors, options?)` | Read all matches | Array of documents |
+| `get(collection, selector, null)` | Count matches | Number |
+| `set(collection, document, options?)` | Upsert and merge | Stored document |
+| `set(collection, documents, options?)` | Upsert and merge many | Array of stored documents |
+| `set(collection, id, null, options?)` | Delete by ID | Number deleted |
+| `set(collection, ids, null, options?)` | Delete by IDs | Number deleted |
 
-### 2.1 Document
+A collection is a non-empty string. An ID is a non-empty string, unique within its collection. A query is an object containing field conditions. A selector is an ID, query, or array of selectors. Options, when present, are always last.
 
-* JavaScript object convertible to JSON
-* `id` is the logical identifier
-* `_id` is used transparently when required by the underlying client
-* `rev` is optional and adapter-defined
-* `null` values are removed before storage
-* Date objects are converted to the underlying client representation
+Only the combinations defined here are part of the core interface.
 
----
+## Documents
 
-## 3. Adapter Surface
+Documents are plain objects containing JSON values. The `id` field identifies the document.
 
-### 3.1 `insert`
+- A document without an ID receives a generated UUIDv7 when saved.
+- An explicitly supplied ID must be a non-empty string.
+- Field values of `null` are stored as JSON null; they do not delete fields.
+- Nested objects and arrays are valid document values.
+- Field names are literal top-level properties. Dots do not imply traversal.
+- Returned documents include their IDs.
 
-```ts
-insert(values: Array<JSONSerializableObject>)
-  -> Array<{ id: ID, rev?: Rev }>
-```
+Collections are available on first use without a separate creation call. Reading a missing collection behaves like reading an empty collection.
 
-* Inserts multiple documents
-* UUID generated if `id` missing
-* Input order preserved
+## Get
 
----
+### One document
 
-### 3.2 `update`
-
-```ts
-update(query: Query, values: JSONSerializableObject)
-  -> { n: number }
-```
-
-* Updates all matching documents
-* `null` properties removed
-
----
-
-### 3.3 `remove`
-
-```ts
-remove(query: Query)
-  -> { n: number }
-```
-
-* Removes all matching documents
-
----
-
-### 3.4 `list`
-
-```ts
-list(query: Query, queryOptions?: QueryOptions)
-  -> Array<Doc>
-```
-
-* Default limit: 100
-
----
-
-### 3.5 `batch`
-
-```ts
-batch(
-  query: Query,
-  batchOptions: QueryOptions & { size?: number },
-  handler: (docs: Array<Doc>) => void | Promise<void>
-) -> void | Promise<void>
-```
-
-* Default `size`: 1000
-
----
-
-### 3.6 `set`
-
-```ts
-set(values: JSONSerializableObject)
-  -> Doc
-
-set(query: Query, values: JSONSerializableObject | null)
-  -> Doc | null
-```
-
-* Always returns full document
-* `set(values)` with existing `id` returns existing doc without write
-* `set(query, null)` deletes and returns deleted doc or `null`
-
----
-
-### 3.7 `get`
-
-```ts
-get(query: Query, queryOptions?: QueryOptions)
-  -> Doc | null
-```
-
----
-
-### 3.8 `count`
-
-```ts
-count(query: Query, queryOptions?: QueryOptions)
-  -> number
-```
-
----
-
-### 3.9 `index`
-
-```ts
-index(...args: unknown[]) -> unknown
-```
-
-* Adapter-specific
-
----
-
-## 4. Query Semantics
-
-### 4.1 Query Shape
-
-```ts
-Query := {
-  [field: string]: Predicate | Value
-}
-```
-
-* `{}` matches all documents
-* Multiple fields imply logical AND
-* No implicit dot-notation
-
----
-
-### 4.2 Predicate Forms
-
-```ts
-Predicate :=
-  | { $eq: Value }
-  | { $ne: Value }
-  | { $gt: Value }
-  | { $gte: Value }
-  | { $lt: Value }
-  | { $lte: Value }
-  | { $in: Value[] }
-  | { $nin: Value[] }
-  | { $regex: RegExp | string }
-  | { $exists: boolean }
-```
-
-Shorthand:
+An ID or query object returns one document, or `null` if nothing matches:
 
 ```js
-{ field: value } === { field: { $eq: value } }
+await db.get('user', 'user-id')
+await db.get('user', { active: true })
+await db.get('user', {})
+await db.get('user') // Same as an empty query
 ```
 
----
+An empty query matches every document. Without sorting, which match comes first is unspecified.
 
-### 4.3 Predicate Semantics
+### Multiple documents
 
-* `$eq`: field exists; identity comparison; dates by timestamp
-* `$ne`: field exists; not equal
-* `$gt/$gte/$lt/$lte`: natural ordering; dates by timestamp
-* `$in`: matches any element
-* `$nin`: missing-field behavior implementation-defined
-* `$regex`: invalid patterns never throw
-* `$exists`: presence test
+An array selector returns an array of matching documents:
 
----
-
-## 5. Query Options
-
-```ts
-QueryOptions := {
-  limit?: number        // default: 1000
-  skip?: number         // default: 0
-  sort?: { [field]: 1 | -1 }
-  fields?: { [field]: boolean }
-}
+```js
+await db.get('user', ['first-id', 'second-id'])
+await db.get('user', [{ active: true }])
+await db.get('user', [{}]) // All documents
+await db.get('user', []) // No documents
 ```
 
-* `id` included by default if available
+Array entries are combined with OR. A document matching multiple entries appears only once. Missing IDs are omitted. Without sorting, result order is unspecified, including for arrays of IDs.
 
----
+```js
+await db.get('user', [
+  { active: true, country: 'NO' },
+  { active: true, country: 'SE' }
+])
+```
 
-## 6. Adapter Extensions
+This returns active users in either country. Fields within each object are combined with AND.
 
-* Adapter-specific functions allowed
-* Underlying client exposed via `adapter.data`
+### Options
 
----
+Read options are `sort`, `limit`, and `offset`:
 
-## 7. Non-Goals
+```js
+await db.get('user', [{ active: true }], {
+  sort: { age: -1, name: 1 },
+  limit: 20,
+  offset: 40
+})
+```
 
-* Transactions
-* Schemas
-* Concurrency guarantees
-* Storage assumptions
+- Sort directions are `1` for ascending and `-1` for descending. Sort fields are applied in their supplied order.
+- `limit` and `offset` must be non-negative safe integers.
+- An omitted limit imposes no limit on array reads. Offset defaults to zero.
+- Sorting and offset apply before selecting the returned documents.
+- Single-document reads return at most one match, even when a larger limit is supplied.
+- A limit of zero returns `[]` for array reads and `null` for single-document reads.
 
----
+```js
+await db.get('user', {}, { sort: { age: -1 } })
+await db.get('user', {}, { sort: { age: -1 }, offset: 1 })
+```
 
-**End of RFC**
+These return the oldest and second-oldest matching users, respectively.
+
+### Count
+
+A literal `null` in the options position requests the number of matching documents:
+
+```js
+await db.get('user', {}, null) // Count all documents
+await db.get('user', { active: true }, null)
+await db.get('user', [{ active: true }], null) // Same count
+await db.get('user', [{ country: 'NO' }, { country: 'SE' }], null)
+await db.get('user', 'user-id', null) // 0 or 1
+await db.get('user', [], null) // 0
+```
+
+Non-array selectors are automatically wrapped in an array for counting. An object therefore counts all matches rather than selecting only the first. Each matching document counts once, even if it matches several array entries.
+
+Counting returns a number without returning documents. There are no pagination options in the count form.
+
+## Query conditions
+
+### Equality and comparisons
+
+A scalar value is shorthand for `$eq`:
+
+```js
+await db.get('user', { age: 30 })
+await db.get('user', { age: { $eq: 30 } })
+```
+
+These queries are equivalent. Query scalar values are strings, finite numbers, booleans, or `null`. Comparisons are type-sensitive: `30` does not equal `'30'`, and `true` does not equal `1`.
+
+| Operator | Meaning |
+| --- | --- |
+| `$eq` | Equal to the supplied value |
+| `$ne` | Not equal to the supplied value |
+| `$gt` | Greater than |
+| `$gte` | Greater than or equal to |
+| `$lt` | Less than |
+| `$lte` | Less than or equal to |
+| `$in` | Equal to any supplied scalar value |
+| `$nin` | Equal to none of the supplied scalar values |
+| `$exists` | Whether the field is present; operand must be a boolean |
+| `$not` | Negate a field condition or query |
+
+Multiple operators on a field are combined with AND:
+
+```js
+await db.get('user', [{ age: { $gte: 18, $lt: 65 } }])
+await db.get('user', [{ role: { $in: ['admin', 'editor'] } }])
+await db.get('user', [{ role: { $nin: ['guest', 'blocked'] } }])
+```
+
+`$in` and `$nin` compare the whole field to scalar values; they do not search inside stored arrays. An empty `$in` matches nothing; an empty `$nin` matches everything.
+
+### Logic, null, and missing fields
+
+Object fields imply AND. Query arrays imply OR. `$and` and `$or` are not supported.
+
+`$not` can negate a field condition or a complete query:
+
+```js
+await db.get('user', [{ age: { $not: { $lt: 18 } } }])
+await db.get('user', [{ $not: { active: true } }])
+```
+
+Equality requires the field to exist. Explicit `null` differs from a missing field. `$exists: true` includes null values:
+
+```js
+await db.get('user', [{ email: null }]) // Explicit null only
+await db.get('user', [{ email: { $exists: true } }])
+await db.get('user', [{ email: { $exists: false } }])
+await db.get('user', [{ email: { $ne: null } }]) // Non-null or missing
+```
+
+Positive comparisons do not match missing fields. Negation includes missing fields when the positive condition would not match. Ordering comparisons against `null` match nothing.
+
+## Set
+
+### Upsert and merge
+
+`set` always upserts:
+
+- Without an ID, create a document with a generated ID.
+- With an unknown ID, create a document with that ID.
+- With an existing ID, merge supplied top-level fields into that document.
+
+```js
+var user = await db.set('user', { name: 'John', age: 30 })
+await db.set('user', { id: user.id, age: 31 })
+await db.set('user', { id: 'jane', name: 'Jane', age: 28 })
+```
+
+Omitted fields remain unchanged. Supplied nested objects and arrays replace their previous values rather than merging recursively. A supplied field value of `null` is stored:
+
+```js
+await db.set('user', {
+  id: 'jane',
+  profile: { country: 'NO' },
+  tags: ['editor'],
+  email: null
+})
+```
+
+Each call returns the complete stored document, including unchanged fields and its ID. `set` does not update documents by query; an ID selects an existing document to merge.
+
+### Multiple documents
+
+An array saves multiple documents and returns their stored values in input order:
+
+```js
+await db.set('user', [
+  { id: 'jane', age: 29 },
+  { name: 'John', age: 30 }
+])
+
+await db.set('user', []) // []
+```
+
+Each entry follows the same upsert rules. Entries are applied in input order. A save call is atomic, including its lookup and merge: if an entry fails, the entire call is rolled back.
+
+### Delete
+
+An ID followed by `null` deletes that document. An array of IDs followed by `null` deletes those documents:
+
+```js
+await db.set('user', 'user-id', null)
+await db.set('user', ['first-id', 'second-id'], null)
+await db.set('user', [], null) // 0
+```
+
+Deletion returns the number of documents deleted. Missing IDs are ignored, and duplicate IDs count once. Delete selectors must be IDs, not query objects. A delete call validates all IDs before removing documents.
+
+### Options
+
+Save and delete options currently accept only an empty object. Options remain last:
+
+```js
+await db.set('user', { id: 'jane', age: 30 }, {})
+await db.set('user', 'jane', null, {})
+```
+
+## Errors
+
+Invalid arguments, unsupported operators, and unsupported options reject the returned promise. They must not be silently ignored. A normal read with no matches returns `null` or `[]`; a count or deletion with no matches returns `0`.
+
+## Optional extensions
+
+An implementation may expose `alter` as an optional extra for collection and index management. It is outside the core `get`/`set` specification; its signature and behavior are implementation-defined.
+
+Index management is not required by this specification. Implementations may scan documents, manage indexes automatically, or offer explicit management separately. Connection setup, closing connections, and storage configuration are also outside the core interface.
