@@ -46,7 +46,7 @@ Collections are available on first use without a separate creation call. Reading
 
 An ID or query map returns one document, or `null` if nothing matches:
 
-```text
+```js
 get('user', 'user-id')
 get('user', { active: true })
 get('user', {})
@@ -59,7 +59,7 @@ An empty query matches every document. Without sorting, which match comes first 
 
 A list selector returns a list of matching documents:
 
-```text
+```js
 get('user', ['first-id', 'second-id'])
 get('user', [{ active: true }])
 get('user', [{}]) // All documents
@@ -68,7 +68,7 @@ get('user', []) // No documents
 
 List entries are combined with OR. A document matching multiple entries appears only once. Missing IDs are omitted. Without sorting, result order is unspecified, including for lists of IDs.
 
-```text
+```js
 get('user', [
   { active: true, country: 'NO' },
   { active: true, country: 'SE' }
@@ -81,7 +81,7 @@ This returns active users in either country. Fields within each map are combined
 
 Read options are `sort`, `limit`, and `offset`:
 
-```text
+```js
 get('user', [{ active: true }], {
   sort: { age: -1, name: 1 },
   limit: 20,
@@ -96,7 +96,7 @@ get('user', [{ active: true }], {
 - Single-document reads return at most one match, even when a larger limit is supplied.
 - A limit of zero returns `[]` for list reads and `null` for single-document reads.
 
-```text
+```js
 get('user', {}, { sort: { age: -1 } })
 get('user', {}, { sort: { age: -1 }, offset: 1 })
 ```
@@ -107,7 +107,7 @@ These return the oldest and second-oldest matching users, respectively.
 
 A literal `null` in the options position requests the number of matching documents:
 
-```text
+```js
 get('user', {}, null) // Count all documents
 get('user', { active: true }, null)
 get('user', [{ active: true }], null) // Same count
@@ -126,7 +126,7 @@ Counting returns a number without returning documents. There are no pagination o
 
 A scalar value is shorthand for `$eq`:
 
-```text
+```js
 get('user', { age: 30 })
 get('user', { age: { $eq: 30 } })
 ```
@@ -148,7 +148,7 @@ These queries are equivalent. Query scalar values are strings, finite numbers, b
 
 Multiple operators on a field are combined with AND:
 
-```text
+```js
 get('user', [{ age: { $gte: 18, $lt: 65 } }])
 get('user', [{ role: { $in: ['admin', 'editor'] } }])
 get('user', [{ role: { $nin: ['guest', 'blocked'] } }])
@@ -162,14 +162,14 @@ Map fields imply AND. Query lists imply OR. `$and` and `$or` are not supported.
 
 `$not` can negate a field condition or a complete query:
 
-```text
+```js
 get('user', [{ age: { $not: { $lt: 18 } } }])
 get('user', [{ $not: { active: true } }])
 ```
 
 Equality requires the field to exist. Explicit `null` differs from a missing field. `$exists: true` includes null values:
 
-```text
+```js
 get('user', [{ email: null }]) // Explicit null only
 get('user', [{ email: { $exists: true } }])
 get('user', [{ email: { $exists: false } }])
@@ -188,7 +188,7 @@ Positive comparisons do not match missing fields. Negation includes missing fiel
 - With an unknown ID, create a document with that ID.
 - With an existing ID, merge supplied top-level fields into that document.
 
-```text
+```js
 user = set('user', { name: 'John', age: 30 })
 set('user', { id: user.id, age: 31 })
 set('user', { id: 'jane', name: 'Jane', age: 28 })
@@ -196,7 +196,7 @@ set('user', { id: 'jane', name: 'Jane', age: 28 })
 
 Omitted fields remain unchanged. Supplied nested maps and lists replace their previous values rather than merging recursively. A supplied field value of `null` is stored:
 
-```text
+```js
 set('user', {
   id: 'jane',
   profile: { country: 'NO' },
@@ -211,7 +211,7 @@ Each call returns the complete stored document, including unchanged fields and i
 
 A list saves multiple documents and returns their stored values in input order:
 
-```text
+```js
 set('user', [
   { id: 'jane', age: 29 },
   { name: 'John', age: 30 }
@@ -226,7 +226,7 @@ Each entry follows the same upsert rules. Entries are applied in input order. A 
 
 An ID followed by `null` deletes that document. A list of IDs followed by `null` deletes those documents:
 
-```text
+```js
 set('user', 'user-id', null)
 set('user', ['first-id', 'second-id'], null)
 set('user', [], null) // 0
@@ -238,7 +238,7 @@ Deletion returns the number of documents deleted. Missing IDs are ignored, and d
 
 Save and delete options currently accept only an empty map. Options remain last:
 
-```text
+```js
 set('user', { id: 'jane', age: 30 }, {})
 set('user', 'jane', null, {})
 ```
